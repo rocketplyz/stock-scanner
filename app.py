@@ -455,6 +455,11 @@ async function loadState() {{
   const res = await fetch('/api/state');
   const data = await res.json();
   applyState(data);
+  // If a scan is already running (e.g. this process just cold-started), poll
+  // until it finishes so visitors see real data without clicking Refresh.
+  if (data.scanning) {{
+    setTimeout(loadState, 4000);
+  }}
 }}
 
 function applyState(data) {{

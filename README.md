@@ -134,3 +134,35 @@ it open in a browser tab and just refresh.
 - The TradingView link uses `tradingview.com/symbols/<TICKER>/`, which resolves
   for the vast majority of US-listed tickers; a handful of thinly-traded or
   dual-listed symbols may land on the wrong exchange.
+
+## Hosting it as a real website
+
+`app.py` runs equally well under a production WSGI server, which is how it's
+deployed (this repo includes `render.yaml` for one-click Render deployment):
+
+```bash
+gunicorn --workers 1 --threads 4 --timeout 120 -b 0.0.0.0:$PORT app:app
+```
+
+Single worker is intentional — state lives in an in-memory dict shared via a
+lock, not a database, so only one process can hold it; threads let that one
+process still serve concurrent visitors without blocking behind a scan.
+
+Since there's no CLI invocation in this mode, configuration comes from env
+vars instead: `SCANNER_UNIVERSE`, `SCANNER_PERIOD`, `SCANNER_MIN_PRICE`,
+`SCANNER_MIN_AVG_VOLUME`, `SCANNER_TOP`, `SCANNER_AUTO_REFRESH_SECONDS` (how
+often the server rescans on its own during market hours, default 1200s/20min).
+
+Public-deployment notes:
+- The `/api/scan` endpoint ignores any client-supplied parameters (universe
+  etc. are a server-config decision, not a visitor's) and rate-limits itself
+  (20s cooldown, and won't start a second scan while one's in flight) so
+  repeated Refresh clicks can't be used to hammer Yahoo Finance.
+- The page auto-refreshes itself every `SCANNER_AUTO_REFRESH_SECONDS` during
+  market hours, so it stays reasonably current without anyone clicking Refresh.
+- Free hosting tiers that sleep on inactivity (e.g. Render's free plan) will
+  cold-start on the next visit and run an initial scan; the page polls itself
+  every few seconds while a scan is in progress so it fills in automatically.
+- There's no login/access control — anyone with the URL can view it and click
+  Refresh. Add a host-level password (e.g. Render's built-in basic auth, or a
+  reverse proxy) if you want it private instead.
