@@ -3,3 +3,4 @@ pandas>=2.0
 numpy>=1.24
 flask>=3.0
 gunicorn>=21.2
+lxml>=5.0

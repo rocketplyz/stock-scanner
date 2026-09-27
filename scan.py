@@ -20,6 +20,7 @@ from analysis import evaluate, compute_indicators  # noqa: E402
 from universe import resolve_universe  # noqa: E402
 
 CHUNK_SIZE = 150
+YF_TIMEOUT = 30  # seconds - yfinance/requests has no default, so a hung/blocked host hangs forever without this
 
 
 def flatten_ticker_columns(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
@@ -44,7 +45,7 @@ def fetch_data(tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame
             try:
                 data = yf.download(
                     chunk, period=period, interval="1d", group_by="ticker",
-                    progress=False, threads=True, auto_adjust=True,
+                    progress=False, threads=True, auto_adjust=True, timeout=YF_TIMEOUT,
                 )
                 break
             except Exception as e:

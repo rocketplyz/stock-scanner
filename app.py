@@ -67,12 +67,46 @@ def _market_is_open(now=None) -> bool:
     return open_t <= now <= close_t
 
 
+SCAN_TIMEOUT_SECONDS = 150  # hard cap so a hung network call can never leave "scanning" stuck forever
+
+
+def _run_with_timeout(fn, args=(), kwargs=None, timeout=SCAN_TIMEOUT_SECONDS):
+    """Run fn in its own thread and wait up to `timeout`s. yfinance/pandas network
+    calls don't reliably honor their own timeout kwargs in every code path (e.g.
+    Yahoo's cookie/crumb handshake can hang from a datacenter IP regardless of
+    the timeout passed to the actual data request) - this is the outer guarantee
+    that a scan always resolves one way or another instead of hanging forever.
+    Note: on timeout the inner thread is abandoned running (daemon, can't be
+    killed) rather than actually stopped - acceptable to trade a leaked thread
+    for the caller never being stuck."""
+    kwargs = kwargs or {}
+    box = {}
+
+    def target():
+        try:
+            box["value"] = fn(*args, **kwargs)
+        except Exception as e:
+            box["error"] = e
+
+    t = threading.Thread(target=target, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"Timed out after {timeout}s (Yahoo Finance may be slow or blocked from this host)")
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _do_scan(universe, period, min_price, min_avg_volume, top):
     with LOCK:
         STATE["scanning"] = True
         STATE["error"] = None
     try:
-        results = run_scan(universe, period=period, min_price=min_price, min_avg_volume=min_avg_volume)
+        results = _run_with_timeout(
+            run_scan, args=(universe,),
+            kwargs={"period": period, "min_price": min_price, "min_avg_volume": min_avg_volume},
+        )
         with LOCK:
             STATE["results"] = results[:top]
             STATE["by_ticker"] = {r["ticker"]: r for r in results}  # keep all, not just top, for detail lookups
@@ -244,7 +278,7 @@ def api_stock(ticker):
         cached = STATE["by_ticker"].get(ticker)
     if cached is None:
         try:
-            df = yf.download(ticker, period=STATE["period"], interval="1d", progress=False, auto_adjust=True)
+            df = yf.download(ticker, period=STATE["period"], interval="1d", progress=False, auto_adjust=True, timeout=30)
             df = flatten_ticker_columns(df, ticker)
         except Exception as e:
             return jsonify({"error": f"Could not fetch {ticker}: {e}"}), 502

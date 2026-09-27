@@ -1,19 +1,29 @@
 """Ticker universe loading, with local caching so we don't hit Wikipedia/GitHub every run."""
 import json
 import time
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
+import requests
 
 CACHE_DIR = Path(__file__).parent / ".cache"
 CACHE_DIR.mkdir(exist_ok=True)
 CACHE_TTL_SECONDS = 24 * 3600  # refresh constituent lists once a day
+HTTP_TIMEOUT = 15  # seconds - without this, a slow/blocked host hangs forever (no default in requests)
+HTTP_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; stock-scanner/1.0)"}
 
 SP500_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 NASDAQ100_WIKI_URL = "https://en.wikipedia.org/wiki/Nasdaq-100"
 SP500_CSV_FALLBACK = (
     "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
 )
+
+
+def _get_html(url: str) -> str:
+    resp = requests.get(url, timeout=HTTP_TIMEOUT, headers=HTTP_HEADERS)
+    resp.raise_for_status()
+    return resp.text
 
 
 def _cache_path(name: str) -> Path:
@@ -44,10 +54,11 @@ def get_sp500():
     if cached:
         return cached
     try:
-        tables = pd.read_html(SP500_WIKI_URL)
+        tables = pd.read_html(StringIO(_get_html(SP500_WIKI_URL)))
         tickers = _clean(tables[0]["Symbol"].tolist())
     except Exception:
-        df = pd.read_csv(SP500_CSV_FALLBACK)
+        csv_text = _get_html(SP500_CSV_FALLBACK)
+        df = pd.read_csv(StringIO(csv_text))
         col = "Symbol" if "Symbol" in df.columns else df.columns[0]
         tickers = _clean(df[col].tolist())
     _save_cache("sp500", tickers)
@@ -58,7 +69,7 @@ def get_nasdaq100():
     cached = _load_cache("nasdaq100")
     if cached:
         return cached
-    tables = pd.read_html(NASDAQ100_WIKI_URL)
+    tables = pd.read_html(StringIO(_get_html(NASDAQ100_WIKI_URL)))
     tickers = []
     for t in tables:
         if "Ticker" in t.columns:
@@ -67,6 +78,12 @@ def get_nasdaq100():
         if "Symbol" in t.columns:
             tickers = t["Symbol"].tolist()
             break
+    if not tickers:
+        raise RuntimeError(
+            "Couldn't find a Ticker/Symbol column in any table on the Nasdaq-100 Wikipedia "
+            "page - it may have been restructured. Use --universe sp500, or a comma list / "
+            "file of tickers instead."
+        )
     tickers = _clean(tickers)
     _save_cache("nasdaq100", tickers)
     return tickers
