@@ -46,16 +46,17 @@ def find_swings(df: pd.DataFrame, window: int = SWING_WINDOW):
 
     roll_max = df["High"].rolling(span, center=True).max()
     roll_min = df["Low"].rolling(span, center=True).min()
-    is_high = (df["High"] == roll_max) & roll_max.notna()
-    is_low = (df["Low"] == roll_min) & roll_min.notna()
+    is_high = ((df["High"] == roll_max) & roll_max.notna()).to_numpy()
+    is_low = ((df["Low"] == roll_min) & roll_min.notna()).to_numpy()
 
-    candidates = []
-    high_vals, low_vals = df["High"].values, df["Low"].values
-    for pos in range(n):
-        if is_high.iloc[pos]:
-            candidates.append((pos, "H", float(high_vals[pos])))
-        if is_low.iloc[pos]:
-            candidates.append((pos, "L", float(low_vals[pos])))
+    # Vectorized: find matching positions directly instead of a per-row .iloc
+    # loop (which, at pandas' per-call overhead, is slow enough across hundreds
+    # of tickers to matter on a CPU-constrained host).
+    high_vals, low_vals = df["High"].to_numpy(), df["Low"].to_numpy()
+    high_positions = np.nonzero(is_high)[0]
+    low_positions = np.nonzero(is_low)[0]
+    candidates = [(int(pos), "H", float(high_vals[pos])) for pos in high_positions]
+    candidates += [(int(pos), "L", float(low_vals[pos])) for pos in low_positions]
     candidates.sort(key=lambda c: c[0])
 
     alternating = []
@@ -126,7 +127,10 @@ def compute_indicators(df: pd.DataFrame) -> dict | None:
     vol20 = vol.rolling(20).mean()
     bb_std = close.rolling(20).std()
     bb_width = (4 * bb_std) / sma20  # (upper-lower)/mid, upper/lower = sma20 +/- 2*std
-    bb_width_rank = bb_width.rolling(100).apply(lambda s: pd.Series(s).rank(pct=True).iloc[-1], raw=False)
+    # raw=True + plain numpy math (vs. constructing a pd.Series and calling
+    # .rank() per row with raw=False) - same result, much cheaper per call,
+    # which matters across hundreds of tickers on a CPU-constrained host.
+    bb_width_rank = bb_width.rolling(100).apply(lambda a: (a <= a[-1]).mean(), raw=True)
     high20_excl_today = close.shift(1).rolling(20).max()
     high52_excl_today = close.shift(1).rolling(252).max()
     rsi14 = rsi(close, 14)

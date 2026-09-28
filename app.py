@@ -6,7 +6,7 @@ Local dev: python3 app.py --universe sp500, then open http://127.0.0.1:5050
 (the built-in Flask dev server is fine for this, single-user, loopback only).
 
 Production (e.g. Railway): served by a WSGI server that imports this module -
-`gunicorn --workers 1 --threads 4 --timeout 120 -b 0.0.0.0:$PORT app:app`.
+`gunicorn --workers 1 --threads 4 --timeout 280 -b 0.0.0.0:$PORT app:app`.
 Single worker is intentional: state lives in an in-memory dict (STATE) shared
 via a lock, not a database, so only one process can hold it. Threads let that
 one process still serve concurrent requests without blocking behind a scan.
@@ -67,7 +67,10 @@ def _market_is_open(now=None) -> bool:
     return open_t <= now <= close_t
 
 
-SCAN_TIMEOUT_SECONDS = 150  # hard cap so a hung network call can never leave "scanning" stuck forever
+SCAN_TIMEOUT_SECONDS = 240  # hard cap so a hung network call can never leave "scanning" stuck forever -
+# measured ~127s for the full S&P 500 fetch alone on Render's free tier, so this needs real headroom.
+# Must stay below the gunicorn --timeout in the start command, or gunicorn kills the worker first and
+# this handler never gets to run (that's what silently broke the first production fix attempt).
 
 
 def _run_with_timeout(fn, args=(), kwargs=None, timeout=SCAN_TIMEOUT_SECONDS):

@@ -141,7 +141,7 @@ it open in a browser tab and just refresh.
 deployed (this repo includes `render.yaml` for one-click Render deployment):
 
 ```bash
-gunicorn --workers 1 --threads 4 --timeout 120 -b 0.0.0.0:$PORT app:app
+gunicorn --workers 1 --threads 4 --timeout 280 -b 0.0.0.0:$PORT app:app
 ```
 
 Single worker is intentional — state lives in an in-memory dict shared via a
