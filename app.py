@@ -88,12 +88,16 @@ def _run_with_timeout(fn, args=(), kwargs=None, timeout=SCAN_TIMEOUT_SECONDS):
     def target():
         try:
             box["value"] = fn(*args, **kwargs)
+            print("  [watchdog] target finished normally", file=sys.stderr, flush=True)
         except Exception as e:
             box["error"] = e
+            print(f"  [watchdog] target raised: {e!r}", file=sys.stderr, flush=True)
 
     t = threading.Thread(target=target, daemon=True)
     t.start()
     t.join(timeout)
+    print(f"  [watchdog] join returned, is_alive={t.is_alive()}, box_keys={list(box.keys())}",
+          file=sys.stderr, flush=True)
     if t.is_alive():
         raise TimeoutError(f"Timed out after {timeout}s (Yahoo Finance may be slow or blocked from this host)")
     if "error" in box:
@@ -106,20 +110,26 @@ def _do_scan(universe, period, min_price, min_avg_volume, top):
         STATE["scanning"] = True
         STATE["error"] = None
     try:
+        print("  [do_scan] calling _run_with_timeout", file=sys.stderr, flush=True)
         results = _run_with_timeout(
             run_scan, args=(universe,),
             kwargs={"period": period, "min_price": min_price, "min_avg_volume": min_avg_volume},
         )
+        print(f"  [do_scan] got {len(results) if results is not None else None} results, updating STATE",
+              file=sys.stderr, flush=True)
         with LOCK:
             STATE["results"] = results[:top]
             STATE["by_ticker"] = {r["ticker"]: r for r in results}  # keep all, not just top, for detail lookups
             STATE["generated"] = datetime.now(timezone.utc).astimezone()
             STATE["universe"], STATE["period"] = universe, period
             STATE["min_price"], STATE["min_avg_volume"], STATE["top"] = min_price, min_avg_volume, top
+        print("  [do_scan] STATE updated OK", file=sys.stderr, flush=True)
     except Exception as e:
+        print(f"  [do_scan] exception: {e!r}", file=sys.stderr, flush=True)
         with LOCK:
             STATE["error"] = str(e)
     finally:
+        print("  [do_scan] finally: scanning=False", file=sys.stderr, flush=True)
         with LOCK:
             STATE["scanning"] = False
 
