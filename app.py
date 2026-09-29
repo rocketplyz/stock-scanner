@@ -499,8 +499,16 @@ async function loadState() {{
   }}
 }}
 
+function universeLabel(universe) {{
+  if (universe.includes(',')) {{
+    const n = universe.split(',').filter(s => s.trim()).length;
+    return `custom list (${{n}} tickers)`;
+  }}
+  return universe;
+}}
+
 function applyState(data) {{
-  document.getElementById('universe-label').textContent = data.universe;
+  document.getElementById('universe-label').textContent = universeLabel(data.universe);
   document.getElementById('generated-label').textContent = data.generated_label;
   document.getElementById('stats').innerHTML = data.stats_html;
   document.getElementById('rows').innerHTML = data.rows_html;

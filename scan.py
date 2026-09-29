@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 import time
 import webbrowser
 from datetime import datetime, timezone
@@ -68,6 +69,38 @@ def fetch_data(tickers: list[str], period: str = "1y") -> dict[str, pd.DataFrame
     return out
 
 
+def _compute_one(ticker, df, min_price, min_avg_volume, timeout=15):
+    """compute_indicators+evaluate for one ticker, with its own hard timeout so a
+    single pathological ticker's data can't hang (or silently take minutes on) the
+    whole batch - isolates the failure to that ticker (skipped, logged) instead."""
+    box = {}
+
+    def target():
+        feats = compute_indicators(df)
+        if feats is None:
+            return
+        if feats["close"] < min_price:
+            return
+        if not pd.isna(feats.get("vol20avg", float("nan"))) and feats["vol20avg"] < min_avg_volume:
+            return
+        ev = evaluate(feats)
+        if ev["best_setup"] is None:
+            return
+        box["result"] = {"ticker": ticker, "features": feats, "eval": ev}
+
+    t = threading.Thread(target=target, daemon=True)
+    start = time.time()
+    t.start()
+    t.join(timeout)
+    elapsed = time.time() - start
+    if t.is_alive():
+        print(f"  ! {ticker}: compute exceeded {timeout}s, skipping", file=sys.stderr)
+        return None
+    if elapsed > 2:
+        print(f"  ! {ticker}: compute took {elapsed:.1f}s", file=sys.stderr)
+    return box.get("result")
+
+
 def run_scan(universe_spec: str, period="1y", min_price=5.0, min_avg_volume=300_000):
     tickers = resolve_universe(universe_spec)
     print(f"Universe: {len(tickers)} tickers ({universe_spec})", file=sys.stderr)
@@ -75,18 +108,13 @@ def run_scan(universe_spec: str, period="1y", min_price=5.0, min_avg_volume=300_
     print(f"Got data for {len(price_data)}/{len(tickers)} tickers", file=sys.stderr)
 
     results = []
-    for ticker, df in price_data.items():
-        feats = compute_indicators(df)
-        if feats is None:
-            continue
-        if feats["close"] < min_price:
-            continue
-        if not pd.isna(feats.get("vol20avg", float("nan"))) and feats["vol20avg"] < min_avg_volume:
-            continue
-        ev = evaluate(feats)
-        if ev["best_setup"] is None:
-            continue
-        results.append({"ticker": ticker, "features": feats, "eval": ev})
+    for i, (ticker, df) in enumerate(price_data.items(), 1):
+        r = _compute_one(ticker, df, min_price, min_avg_volume)
+        if r is not None:
+            results.append(r)
+        if i % 20 == 0:
+            print(f"  computed {i}/{len(price_data)}", file=sys.stderr)
+    print(f"Computed all {len(price_data)} tickers, {len(results)} flagged", file=sys.stderr)
 
     results.sort(key=lambda r: r["eval"]["best_score"], reverse=True)
     return results
@@ -321,7 +349,15 @@ STYLE_CSS = """
 """
 
 
+def _short_universe_label(universe_label: str) -> str:
+    if "," in universe_label:
+        n = len([t for t in universe_label.split(",") if t.strip()])
+        return f"custom list ({n} tickers)"
+    return universe_label
+
+
 def render_html(results, out_path: Path, universe_label: str):
+    universe_label = _short_universe_label(universe_label)
     generated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M %Z")
     html = f"""<!DOCTYPE html>
 <html lang="en">

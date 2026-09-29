@@ -106,10 +106,10 @@ def resolve_universe(spec: str):
             tickers |= set(get_sp500())
         elif low in ("nasdaq100", "ndx"):
             tickers |= set(get_nasdaq100())
-        elif Path(part).exists():
-            tickers |= set(load_from_file(part))
         elif "," in part:
             tickers |= set(_clean(part.split(",")))
+        elif len(part) < 255 and Path(part).exists():
+            tickers |= set(load_from_file(part))
         else:
             tickers.add(part.upper())
     return sorted(tickers)
