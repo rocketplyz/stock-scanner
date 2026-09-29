@@ -27,6 +27,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# Defensive: numpy/pandas' native BLAS thread pool has its own fork-safety hazard,
+# separate from (and one level below) our own Python-level threading - if a
+# multi-threaded BLAS backend spins up its worker threads on import/first-use and
+# a WSGI server then forks, the child can flat-out segfault (reproduced locally
+# under `gunicorn --preload`). Forcing single-threaded BLAS costs nothing at our
+# data sizes and closes this off regardless of which server or platform runs this.
+# Must be set before numpy is imported (via yfinance below) to take effect.
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+
 import yfinance as yf
 from flask import Flask, jsonify, request, Response
 
@@ -159,9 +171,10 @@ def _auto_refresh_loop():
 
 def _bootstrap():
     """Configure STATE from env vars and start the initial scan + auto-refresh
-    loop. Runs at import time so this also works under a production server
-    (`gunicorn app:app`), which imports this module directly and never calls
-    main() / the `python3 app.py` CLI path below."""
+    loop. Called lazily on the first request (see _ensure_started) under a
+    production server, which imports this module directly and never calls
+    main() / the `python3 app.py` CLI path below - not at import time, to
+    stay safe under WSGI servers that fork worker processes after import."""
     universe = os.environ.get("SCANNER_UNIVERSE", STATE["universe"])
     period = os.environ.get("SCANNER_PERIOD", STATE["period"])
     min_price = float(os.environ.get("SCANNER_MIN_PRICE", STATE["min_price"]))
@@ -172,8 +185,41 @@ def _bootstrap():
     threading.Thread(target=_auto_refresh_loop, daemon=True).start()
 
 
-if __name__ != "__main__":
-    _bootstrap()
+_START_GUARD = threading.Lock()
+_started = False
+
+
+def _ensure_started():
+    """Lazily kick off the first scan + auto-refresh loop on the first real
+    request, rather than at module import time. Some WSGI servers (uWSGI's
+    default on PythonAnywhere, gunicorn with --preload) import the app ONCE
+    in a master process and THEN fork worker processes to actually serve
+    requests. POSIX fork() only carries the calling thread into the child -
+    a background thread running in the parent simply vanishes in the child,
+    and if it was holding LOCK at that exact instant, the lock's memory is
+    copied in the *locked* state with no thread left alive to ever release
+    it, permanently deadlocking every `with LOCK:` afterward (including every
+    Flask request handler) - this is exactly what silently broke the
+    PythonAnywhere deployment: the master's thread finished successfully
+    (visible in the master's own logs), but the forked worker inherited a
+    frozen, half-updated STATE and a lock nothing would ever release. Native
+    numpy/pandas thread pools have the same fork-unsafety one level down
+    (reproduced locally as SIGSEGV crash-loops under `gunicorn --preload`).
+    Starting everything only once a request is actually being handled avoids
+    both problems - by then, whichever server this is, forking is done."""
+    global _started
+    if _started:
+        return
+    with _START_GUARD:
+        if _started:
+            return
+        _started = True
+        _bootstrap()
+
+
+@app.before_request
+def _lazy_bootstrap():
+    _ensure_started()
 
 
 def _json_safe(obj):
@@ -1084,10 +1130,12 @@ def main():
     ap.add_argument("--open", action="store_true", help="open the dashboard in a browser once ready")
     args = ap.parse_args()
 
+    global _started
     STATE.update(universe=args.universe, period=args.period, min_price=args.min_price,
                  min_avg_volume=args.min_avg_volume, top=args.top)
 
     if not args.no_scan:
+        _started = True  # so the before_request lazy-start hook doesn't also fire and duplicate this
         threading.Thread(
             target=_do_scan,
             args=(args.universe, args.period, args.min_price, args.min_avg_volume, args.top),
