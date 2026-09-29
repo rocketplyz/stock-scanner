@@ -50,6 +50,7 @@ STATE = {
     "min_avg_volume": 300_000,
     "scanning": False,
     "error": None,
+    "scan_count": 0,
 }
 LOCK = threading.Lock()
 
@@ -109,13 +110,17 @@ def _do_scan(universe, period, min_price, min_avg_volume, top):
     with LOCK:
         STATE["scanning"] = True
         STATE["error"] = None
+        STATE["scan_count"] += 1
+        my_id = STATE["scan_count"]
+    print(f"  [do_scan #{my_id}] started, thread={threading.current_thread().name}, pid={os.getpid()}",
+          file=sys.stderr, flush=True)
     try:
-        print("  [do_scan] calling _run_with_timeout", file=sys.stderr, flush=True)
+        print(f"  [do_scan #{my_id}] calling _run_with_timeout", file=sys.stderr, flush=True)
         results = _run_with_timeout(
             run_scan, args=(universe,),
             kwargs={"period": period, "min_price": min_price, "min_avg_volume": min_avg_volume},
         )
-        print(f"  [do_scan] got {len(results) if results is not None else None} results, updating STATE",
+        print(f"  [do_scan #{my_id}] got {len(results) if results is not None else None} results, updating STATE",
               file=sys.stderr, flush=True)
         with LOCK:
             STATE["results"] = results[:top]
@@ -123,13 +128,15 @@ def _do_scan(universe, period, min_price, min_avg_volume, top):
             STATE["generated"] = datetime.now(timezone.utc).astimezone()
             STATE["universe"], STATE["period"] = universe, period
             STATE["min_price"], STATE["min_avg_volume"], STATE["top"] = min_price, min_avg_volume, top
-        print("  [do_scan] STATE updated OK", file=sys.stderr, flush=True)
+        print(f"  [do_scan #{my_id}] STATE updated OK, scan_count now {STATE['scan_count']}",
+              file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"  [do_scan] exception: {e!r}", file=sys.stderr, flush=True)
+        print(f"  [do_scan #{my_id}] exception: {e!r}", file=sys.stderr, flush=True)
         with LOCK:
             STATE["error"] = str(e)
     finally:
-        print("  [do_scan] finally: scanning=False", file=sys.stderr, flush=True)
+        print(f"  [do_scan #{my_id}] finally: scanning=False, current scan_count={STATE['scan_count']}",
+              file=sys.stderr, flush=True)
         with LOCK:
             STATE["scanning"] = False
 
@@ -264,6 +271,9 @@ def api_state():
             "rows_html": table_rows_html(STATE["results"], clickable=True),
             "debug_pid": os.getpid(),
             "debug_state_id": id(STATE),
+            "debug_scan_count": STATE["scan_count"],
+            "debug_thread_count": threading.active_count(),
+            "debug_thread_names": [t.name for t in threading.enumerate()],
         })
 
 
