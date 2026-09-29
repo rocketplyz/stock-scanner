@@ -7,7 +7,13 @@ services:
     startCommand: gunicorn --workers 1 --threads 4 --timeout 280 -b 0.0.0.0:$PORT app:app
     envVars:
       - key: SCANNER_UNIVERSE
-        value: sp500
+        # Render's free tier is CPU-throttled severely enough that a synchronous
+        # 503-ticker scan (the full S&P 500) doesn't reliably finish even within
+        # a generous watchdog - production logs showed 500+s with zero progress.
+        # This curated ~100-ticker list (large, liquid, cross-sector) keeps
+        # meaningful coverage at a fraction of the compute. Bump back to sp500
+        # if/when this runs on a host with real CPU (a paid plan, or self-hosted).
+        value: "AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA,AVGO,ORCL,CRM,ADBE,AMD,CSCO,ACN,IBM,NOW,INTU,TXN,QCOM,AMAT,MU,PANW,SNPS,CDNS,ANET,LRCX,KLAC,APH,ROP,MSI,JPM,V,MA,BAC,WFC,GS,MS,AXP,BLK,SCHW,C,SPGI,PGR,CB,PNC,USB,JNJ,UNH,LLY,ABBV,MRK,PFE,TMO,ABT,DHR,BMY,AMGN,GILD,VRTX,ISRG,SYK,BSX,MDT,ELV,CI,WMT,PG,KO,PEP,COST,HD,MCD,NKE,DIS,CMCSA,LOW,TJX,SBUX,TGT,BKNG,XOM,CVX,COP,SLB,EOG,GE,CAT,RTX,HON,UNP,BA,DE,LMT,UPS,ADP,ETN,AMT,PLD,LIN,NEE,SO,DUK"
       - key: SCANNER_TOP
         value: "40"
       - key: SCANNER_MIN_PRICE
