@@ -262,6 +262,8 @@ def api_state():
             "generated_label": _generated_label(),
             "stats_html": stats_html(STATE["results"]),
             "rows_html": table_rows_html(STATE["results"], clickable=True),
+            "debug_pid": os.getpid(),
+            "debug_state_id": id(STATE),
         })
 
 
